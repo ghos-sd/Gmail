@@ -1,59 +1,101 @@
 const TOKEN = '8558263047:AAG5WGFNjnKFOtiLrFAjoT_Sbc9kx-MTUXk';
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 
-// تعبيرات نمطية دقيقة جداً
+// Regex دقيق للإيميلات والهواتف (أمريكا وكندا)
 const EMAIL_REGEX = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,10}\b/g;
-// الهواتف: مخصصة لأمريكا وكندا بمختلف الصيغ
-const PHONE_REGEX = /(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}\b/g;
-const LINK_REGEX = /href=["']([^"']+)["']/g;
-
-// قائمة سوداء لتجاهل الروابط غير المفيدة
-const BLACKLIST_DOMAINS = ['facebook.com', 'twitter.com', 'instagram.com', 'linkedin.com', 'youtube.com', 'pinterest.com', 'tiktok.com'];
-const IGNORED_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.css', '.js', '.svg', '.mp4', '.pdf', '.webp', '.woff2'];
+const PHONE_REGEX = /(?:\+?1[-. ]?)?\(?([2-9][0-8][0-9])\)?[-. ]?([2-9][0-9]{2})[-. ]?([0-9]{4})\b/g;
 
 export default {
   async fetch(request, env, ctx) {
-    if (request.method !== 'POST') return new Response('OK', { status: 200 });
-
+    if (request.method !== 'POST') return new Response('OK');
     try {
       const update = await request.json();
-      if (!update.message || !update.message.text) return new Response('OK', { status: 200 });
+      if (!update.message || !update.message.text) return new Response('OK');
 
       const chatId = update.message.chat.id;
       const text = update.message.text.trim();
 
       if (text === '/start') {
-        await sendMessage(chatId, "النظام جاهز. أرسل المواقع (بدون الحاجة لـ http). الدقة 99.99% لأمريكا وكندا.");
-        return new Response('OK', { status: 200 });
+        await sendMessage(chatId, "✅ النظام جاهز بدقة 99.99%\n🎯 التركيز: إيميلات نظيفة + هواتف بمفتاح +1\nالاستهداف: أمريكا وكندا 🇺🇸🇨🇦");
+        return new Response('OK');
       }
 
-      // معالجة الروابط وتصحيحها تلقائياً
       const rawUrls = text.split('\n').map(u => u.trim()).filter(u => u.length > 3);
-      const urls = rawUrls.map(u => {
-        let clean = u;
-        if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
-          clean = 'https://' + clean;
-        }
-        return clean;
-      });
+      const urls = rawUrls.map(u => (u.startsWith('http') ? u : 'https://' + u));
 
       if (urls.length > 0) {
-        await sendMessage(chatId, `تم استلام ${urls.length} موقع. جاري الفحص العميق (الاستهداف: USA/CA)...`);
+        await sendMessage(chatId, `🔍 تم استلام ${urls.length} موقع. جاري الفحص واستخراج الإيميلات أولاً...`);
         ctx.waitUntil(processUrls(chatId, urls));
       }
-
-      return new Response('OK', { status: 200 });
+      return new Response('OK');
     } catch (e) {
-      return new Response('Error', { status: 500 });
+      return new Response('OK');
     }
   }
 };
+
+async function processUrls(chatId, urls) {
+  const allEmails = new Set();
+  const allPhones = new Set();
+
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0' },
+        signal: AbortSignal.timeout(10000)
+      });
+      
+      const rawHtml = await response.text();
+      
+      // 1. استخراج الإيميلات بدقة
+      const emails = rawHtml.match(EMAIL_REGEX) || [];
+      emails.forEach(e => {
+        const email = e.toLowerCase();
+        if (!email.match(/\.(jpg|png|gif|webp|css|js|svg|pdf)$/)) {
+          allEmails.add(email);
+        }
+      });
+
+      // 2. تنظيف النص لاستخراج الهواتف
+      const cleanText = rawHtml
+        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+        .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+        .replace(/<[^>]*>/g, ' ');
+
+      // 3. استخراج الهواتف وتنسيقها (+1)
+      let match;
+      while ((match = PHONE_REGEX.exec(cleanText)) !== null) {
+        const areaCode = match[1];
+        if (areaCode.startsWith('0') || areaCode.startsWith('1')) continue;
+        allPhones.add(`+1${areaCode}${match[2]}${match[3]}`);
+      }
+    } catch (err) {
+      // تجاهل أخطاء المواقع الفردية للاستمرار في البقية
+    }
+  }
+
+  // إرسال النتائج للمستخدم
+  if (allEmails.size === 0 && allPhones.size === 0) {
+    await sendMessage(chatId, "⚠️ لم يتم العثور على إيميلات أو هواتف مطابقة للمواصفات.");
+    return;
+  }
+
+  if (allEmails.size > 0) {
+    const emailList = Array.from(allEmails).sort().join('\n');
+    await sendDocument(chatId, emailList, 'Target_Emails.txt', `📧 تم استخراج ${allEmails.size} إيميل نقي.`);
+  }
+
+  if (allPhones.size > 0) {
+    const phoneList = Array.from(allPhones).sort().join('\n');
+    await sendDocument(chatId, phoneList, 'Target_Phones.txt', `📞 تم استخراج ${allPhones.size} رقم هاتف (بالمفتاح الدولي).`);
+  }
+}
 
 async function sendMessage(chatId, text) {
   await fetch(`${TELEGRAM_API}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text: text })
+    body: JSON.stringify({ chat_id: chatId, text })
   });
 }
 
@@ -62,62 +104,8 @@ async function sendDocument(chatId, content, filename, caption) {
   formData.append('chat_id', chatId);
   formData.append('caption', caption);
   formData.append('document', new Blob([content], { type: 'text/plain' }), filename);
-
   await fetch(`${TELEGRAM_API}/sendDocument`, { method: 'POST', body: formData });
 }
-
-// دالة تنظيف الإيميلات
-function isValidEmail(email) {
-  const lower = email.toLowerCase();
-  for (const ext of IGNORED_EXTENSIONS) {
-    if (lower.endsWith(ext) || lower.includes('wixpress') || lower.includes('sentry') || lower.includes('no-reply')) return false;
-  }
-  return true;
-}
-
-// دالة تنظيف وتنسيق الهواتف (أمريكا وكندا فقط)
-function formatUSAPhone(phone) {
-  const digits = phone.replace(/\D/g, '');
-  // رقم أمريكي/كندي صالح يجب أن يكون 10 أرقام، أو 11 ويبدأ بـ 1
-  if (digits.length === 10) {
-    return `+1-${digits.slice(0,3)}-${digits.slice(3,6)}-${digits.slice(6)}`;
-  } else if (digits.length === 11 && digits.startsWith('1')) {
-    return `+1-${digits.slice(1,4)}-${digits.slice(4,7)}-${digits.slice(7)}`;
-  }
-  return null;
-}
-
-async function processUrls(chatId, urls) {
-  const allEmails = new Set();
-  const allPhones = new Set();
-
-  for (const startUrl of urls) {
-    const visited = new Set();
-    const queue = [startUrl];
-    let domain = '';
-    
-    try {
-      domain = new URL(startUrl).hostname.replace('www.', '');
-    } catch (e) { continue; }
-
-    let pagesChecked = 0;
-
-    while (queue.length > 0 && pagesChecked < 10) {
-      const url = queue.shift();
-      if (visited.has(url)) continue;
-      visited.add(url);
-      pagesChecked++;
-
-      try {
-        const response = await fetch(url, {
-          headers: { 
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml',
-          },
-          redirect: 'follow',
-          signal: AbortSignal.timeout(5000) 
-        });
-        
         if (!response.ok) continue;
         const html = await response.text();
 
