@@ -1,4 +1,4 @@
-name = "my-telegram-bot"
+name = "gmail"
 main = "index.js"
 compatibility_date = "2024-04-17"
 
